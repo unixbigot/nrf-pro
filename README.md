@@ -5,14 +5,13 @@ You will need
 
 * A [J-link programming interface](https://www.aliexpress.com/item/32672270083.html?spm=a2g0s.9042311.0.0.27424c4daotHOw)
 
-* A [generic Bluetooth beacon
-  device](https://www.aliexpress.com/item/32862703531.html?spm=a2g0s.9042311.0.0.27424c4d1vkpZp)  ([another seller](https://www.aliexpress.com/item/32885909449.html?spm=a2g0s.8937460.0.0.67322e0ePOZ8d1))
-  
-* Or, an [nRFPro sensor device](https://www.aliexpress.com/item/32808111676.html?spm=a2g0s.9042311.0.0.27424c4daotHOw)
+* An [nRFPro sensor device](https://www.aliexpress.com/item/32808111676.html?spm=a2g0s.9042311.0.0.27424c4daotHOw)
   
 * Pogo pins (or careful soldering) to connect your J-link
 
-* Install [nRF5 arduino board module](https://github.com/sandeepmistry/arduino-nRF5) arduino board module
+* Install [nRF5 arduino board
+  module](https://github.com/sandeepmistry/arduino-nRF5) arduino board
+  module.   Choose board type 'Generic nRF51', and softDevice S110.
   
 * Install [BLEPeripheral](https://github.com/sandeepmistry/arduino-BLEPeripheral)
   Arduino library 
