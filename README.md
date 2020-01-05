@@ -20,13 +20,12 @@ You will need
 # Preparation
 
 Follow the nRF5 instructions to install.  When you get to the step
-about flashing the softdevice (select softdevice S110, BTE) it will
+about flashing the softdevice (you should choose softdevice S110, BTW) it will
 probably fail to download the soft device, so you need to modify
 softdevices.txt in your arduino packages folder.
 
 On Mac it's
-~/Library/Arduino15/packages/sandeepmistry/hardware/nRF5/0.6.0/softdevices.txt`.
-On linux similar path under `~/.arduino15/packages/`.
+`~/Library/Arduino15/packages/sandeepmistry/hardware/nRF5/0.6.0/softdevices.txt`. On linux similar path under `~/.arduino15/packages/`.
 	
 
 ```
