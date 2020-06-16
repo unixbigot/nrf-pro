@@ -13,11 +13,32 @@
 //    
 //
 
+#include <Wire.h>
 #include <SPI.h>
-#include <BLEPeripheral.h>
+#include "BLEPeripheral.h"
 #include "BLETypedCharacteristics.h"
+#include <Adafruit_BMP280.h>
 
-#define DEVICE_NAME "nrf_pro"
+#define ENABLE_LEDS 1
+#define ENABLE_BUTTONS 1
+
+
+#ifdef ENABLE_BMP
+Adafruit_BMP280 bmp; // I2C
+bool bmpReady = false;
+uint32_t lastTemp;
+float temp;
+float pressure;
+#endif
+
+#ifdef ENABLE_ALS
+#include <AP3216_WE.h>
+AP3216_WE myAP3216 = AP3216_WE();
+uint32_t lastAls=0;
+#endif
+
+
+#define DEVICE_NAME "nrf_pro_0001"
 
 BLEPeripheral device = BLEPeripheral();
 
@@ -43,11 +64,15 @@ struct presentationFormat {
 
 struct presentationFormat fmtU16 = {0x06, 0, 0, 0, 0 };
 struct presentationFormat fmtU32 = {0x08, 0, 0, 0, 0 };
+struct presentationFormat fmtU32_deci = {0x08, -1, 0, 0, 0 };
+struct presentationFormat fmtS16_centi = {0x0E, -2, 0, 0, 0 };
+struct presentationFormat fmtF32 = {0x14, 0, 0, 0, 0 };
   
 //
 // cLed represents our built in LED.   We can read its state and write
 // its state.
 //
+#ifdef ENABLE_LEDS
 BLEUnsignedLongCharacteristic cLed = BLEUnsignedLongCharacteristic(
   "5f5a14ae2fa411eab948666574681792", BLERead | BLEWrite );
 BLEDescriptor dLedName = BLEDescriptor("2901", "LED color");
@@ -62,6 +87,7 @@ BLEUnsignedShortCharacteristic cLedDuty = BLEUnsignedShortCharacteristic(
   "c7a43b022fa411ea83af666574681792", BLERead | BLEWrite);
 BLEDescriptor dLedDutyName = BLEDescriptor("2901", "LED duty percent");
 BLEDescriptor dLedDutyFormat = BLEDescriptor("2904", (unsigned char *)&fmtU16, sizeof(fmtU16));
+#endif
 
 //
 // cButtonN represents an input (presumed active low with pullup).
@@ -71,6 +97,7 @@ BLEDescriptor dLedDutyFormat = BLEDescriptor("2904", (unsigned char *)&fmtU16, s
 // holds and doubleclicks (TODO: use button2 library to directly expose
 // more button stunts)
 //
+#ifdef ENABLE_BUTTONS
 BLEUnsignedShortCharacteristic cButton1 = BLEUnsignedShortCharacteristic(
   "d988af2e2fa411ea8dd5666574681792", BLERead | BLENotify);
 BLEDescriptor dButton1Name = BLEDescriptor("2901", "Button 1");
@@ -87,17 +114,55 @@ BLEDescriptor dButton2Name = BLEDescriptor("2901", "Button 2");
 BLEDescriptor dButton2Format = BLEDescriptor("2904", (unsigned char *)&fmtU16, sizeof(fmtU16));
 
 BLEUnsignedLongCharacteristic cCounter2 = BLEUnsignedLongCharacteristic(
-  "", BLERead | BLEWrite | BLENotify);
+  "5f5a14ae2fa411eab948666574681792", BLERead | BLEWrite | BLENotify);
 BLEDescriptor dCounter2Name = BLEDescriptor("2901", "Counter 2");
 BLEDescriptor dCounter2Format = BLEDescriptor("2904", (unsigned char *)&fmtU32, sizeof(fmtU32));
+#endif
+
+#ifdef ENABLE_BMP
+BLEShortCharacteristic cTemp = BLEShortCharacteristic(
+  "2A6E", BLERead | BLENotify );
+BLEDescriptor dTempName = BLEDescriptor("2901", "Temperature");
+BLEDescriptor dTempFormat = BLEDescriptor("2904", (unsigned char *)&fmtS16_centi, sizeof(fmtS16_centi));
+
+BLEUnsignedLongCharacteristic cPressure = BLEUnsignedLongCharacteristic(
+  "2A6D", BLERead | BLENotify);
+BLEDescriptor dPressureName = BLEDescriptor("2901", "Pressure");
+BLEDescriptor dPressureFormat = BLEDescriptor("2904", (unsigned char *)&fmtU32_deci, sizeof(fmtU32_deci));
+#endif
+
+#ifdef ENABLE_ALS
+BLEFloatCharacteristic cLight = BLEFloatCharacteristic(
+  "de6b0d82-471b-11ea-9ff8-cfc14d72b9c3", BLERead | BLENotify );
+BLEDescriptor dLightName = BLEDescriptor("2901", "Light");
+BLEDescriptor dLightFormat = BLEDescriptor("2904", (unsigned char *)&fmtF32, sizeof(fmtF32));
+
+BLEUnsignedShortCharacteristic cPresence = BLEUnsignedShortCharacteristic(
+  "defb582e-471b-11ea-9b52-53f422fea8f0", BLERead | BLENotify);
+BLEDescriptor dPresenceName = BLEDescriptor("2901", "Presence");
+BLEDescriptor dPresenceFormat = BLEDescriptor("2904", (unsigned char *)&fmtU16, sizeof(fmtU16));
+#endif
 
 //
 // These are the pin assignments discovered by trial and error with the
 // AliExpress nrf51 pro beacon (the one with RGB led and light sensor)
 //
+#ifdef ENABLE_LEDS
 const byte ledPins[3] = {17,18,19};
-uint16_t   button1Pin = 28;
-uint16_t   button2Pin = 21;
+bool led = false;
+byte ledColor[3] = {51,0,102};
+uint16_t ledCycle = 60000/72;
+uint16_t ledDuty = 50;
+#endif
+
+#ifdef ENABLE_BUTTONS
+int   button1Pin = 28;
+int   button2Pin = 21;
+bool button1 = HIGH;
+uint32_t count1 = 0;
+bool button2 = HIGH;
+uint32_t count2 = 0;
+#endif
 
 const byte io1Pin = 0;
 const byte io2Pin = 2;
@@ -117,73 +182,49 @@ const byte tp4Pin = 14;
 // 
 // State of our LEDs and buttons
 // 
-bool led = false;
-byte ledColor[3] = {51,0,102};
-uint16_t ledCycle = 60000/72;
-uint16_t ledDuty = 10;
 
-bool button1;
-uint32_t count1 = 0;
-bool button2;
-uint32_t count2 = 0;
 
 bool connected = false;
 
-
-void setup() {
-  Serial.begin(115200);
-
-  device.setDeviceName(DEVICE_NAME);
-  device.setLocalName(DEVICE_NAME);
-
-  // add attributes (services, characteristics, descriptors) to the device
-  device.addAttribute(service);
-
-  device.addAttribute(cLed);
-  device.addAttribute(dLedName);
-  device.addAttribute(dLedFormat);
-
-  device.addAttribute(cLedCycle);
-  device.addAttribute(dLedCycleName);
-  device.addAttribute(dLedCycleFormat);
-  device.addAttribute(cLedDuty);
-  device.addAttribute(dLedDutyName);
-  device.addAttribute(dLedDutyFormat);
-
-  device.addAttribute(cButton1);
-  device.addAttribute(dButton1Name);
-  device.addAttribute(dButton1Format);
-  device.addAttribute(cCounter1);
-  device.addAttribute(dCounter1Name);
-  device.addAttribute(dCounter1Format);
-
-  device.addAttribute(cButton2);
-  device.addAttribute(dButton2Name);
-  device.addAttribute(dButton2Format);
-  device.addAttribute(cCounter2);
-  device.addAttribute(dCounter2Name);
-  device.addAttribute(dCounter2Format);
-
-  cLed.setValue((ledColor[0]<<16)|(ledColor[1]<<8)|ledColor[2]);
-  cLedCycle.setValue(ledCycle);
-  cLedDuty.setValue(ledDuty);
-  cCounter1.setValue(0);
-  cCounter2.setValue(0);
-
-  device.begin();
-
+void iosetup() 
+{
   // 
   // Set up the IO pins and flash the LED four timesin [red,grn,blue,white]
-  // 
-  pinMode(button1Pin, INPUT_PULLUP);
-  pinMode(button2Pin, INPUT_PULLUP);
+  //
+#ifdef ENABLE_BUTTONS
+  pinMode(button1Pin, INPUT/*_PULLUP*/);
+  pinMode(button2Pin, INPUT/*_PULLUP*/);
+#endif
+#ifdef ENABLE_LEDS
   pinMode(ledPins[0], OUTPUT);
   digitalWrite(ledPins[0], HIGH);
   pinMode(ledPins[1], OUTPUT);
   digitalWrite(ledPins[1], HIGH);
   pinMode(ledPins[2], OUTPUT);
   digitalWrite(ledPins[2], HIGH);
-  
+#endif
+}
+
+void setleds(bool r,bool g,bool b) 
+{
+#ifdef ENABLE_LEDS
+  digitalWrite(ledPins[0], r);
+  digitalWrite(ledPins[1], g);
+  digitalWrite(ledPins[2], b);
+  delay(250);
+#endif
+}
+
+void flashleds()
+{
+#ifdef ENABLE_LEDS
+  // 
+  // flash the LED four timesin [red,grn,blue,white]
+  // 
+  digitalWrite(ledPins[0], HIGH);
+  digitalWrite(ledPins[1], HIGH);
+  digitalWrite(ledPins[2], HIGH);
+  delay(500);
   for (int i=0; i<4;i++) {
     if (i<3) {
       digitalWrite(ledPins[i], LOW);
@@ -205,11 +246,139 @@ void setup() {
     }
     delay(250);
   }
+  delay(1000);
+#endif
+}
+
+void setup() {
+  Serial.begin(115200);
+  iosetup();
+
+#ifdef ENABLE_LEDS
+  // 4 green flashes
+  for (int i=0; i<4;i++) {
+    setleds(HIGH,LOW,HIGH);
+    setleds(HIGH, HIGH, HIGH);
+  }
+#endif
   
+#ifdef ENABLE_BMP
+    if (bmp.begin()) {
+      bmpReady = true;
+
+      bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
+		      Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
+		      Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
+		      Adafruit_BMP280::FILTER_X16,      /* Filtering. */
+		      Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
+    }
+    else {
+      Serial.println(F("Could not find a valid BMP280 sensor, check wiring!"));
+      digitalWrite(ledPins[0], LOW);
+      delay(1000);
+      digitalWrite(ledPins[0], HIGH);
+      delay(1000);
+      digitalWrite(ledPins[0], LOW);
+      delay(1000);
+      digitalWrite(ledPins[0], HIGH);
+      delay(1000);
+      digitalWrite(ledPins[0], LOW);
+      delay(1000);
+      digitalWrite(ledPins[0], HIGH);
+      delay(1000);
+    }
+#endif
+
+#ifdef ENABLE_ALS
+    Wire.begin();
+    myAP3216.init();
+    myAP3216.setLuxRange(RANGE_20661);
+    myAP3216.setMode(ALS_PS_ONCE);
+#endif
+
+
+    setleds(LOW, HIGH, HIGH); // red
+
+  device.setDeviceName(DEVICE_NAME);
+  device.setLocalName(DEVICE_NAME);
+
+  // add attributes (services, characteristics, descriptors) to the device
+  device.addAttribute(service);
+
+#ifdef ENABLE_LEDS
+  device.addAttribute(cLed);
+  device.addAttribute(dLedName);
+  device.addAttribute(dLedFormat);
+
+  device.addAttribute(cLedCycle);
+  device.addAttribute(dLedCycleName);
+  device.addAttribute(dLedCycleFormat);
+  device.addAttribute(cLedDuty);
+  device.addAttribute(dLedDutyName);
+  device.addAttribute(dLedDutyFormat);
+#endif
+
+#ifdef ENABLE_BUTTONS
+  device.addAttribute(cButton1);
+  device.addAttribute(dButton1Name);
+  device.addAttribute(dButton1Format);
+  device.addAttribute(cCounter1);
+  device.addAttribute(dCounter1Name);
+  device.addAttribute(dCounter1Format);
+
+  device.addAttribute(cButton2);
+  device.addAttribute(dButton2Name);
+  device.addAttribute(dButton2Format);
+  device.addAttribute(cCounter2);
+  device.addAttribute(dCounter2Name);
+  device.addAttribute(dCounter2Format);
+#endif
+
+#ifdef ENABLE_BMP
+  device.addAttribute(cTemp);
+  device.addAttribute(dTempName);
+  device.addAttribute(dTempFormat);
+
+  device.addAttribute(cPressure);
+  device.addAttribute(dPressureName);
+  device.addAttribute(dPressureFormat);
+#endif
+
+#ifdef ENABLE_ALS
+  device.addAttribute(cLight);
+  device.addAttribute(dLightName);
+  device.addAttribute(dLightFormat);
+
+  device.addAttribute(cPresence);
+  device.addAttribute(dPresenceName);
+  device.addAttribute(dPresenceFormat);
+#endif
+  
+  setleds(HIGH, LOW, HIGH);// green
+
+#ifdef ENABLE_LEDS    
+  cLed.setValue((ledColor[0]<<16)|(ledColor[1]<<8)|ledColor[2]);
+  cLedCycle.setValue(ledCycle);
+  cLedDuty.setValue(ledDuty);
+#endif
+
+#ifdef ENABLE_BUTTONS
+  cCounter1.setValue(0);
+  cCounter2.setValue(0);
+#endif
+
+  setleds(HIGH, HIGH, LOW); // blue
+  device.begin();
+
+  setleds(LOW, LOW, LOW);  // white
+  flashleds();
 }
 
 void loop() {
+  uint32_t now = millis();
 
+  //device.poll();
+  
   // 
   // Check whether a 'Central' device has connected to us.
   // 
@@ -238,6 +407,7 @@ void loop() {
     //
     // Reads are handled pretty much automatically, once we set the value.
     //
+#ifdef ENABLE_LEDS
     if (cLed.written()) {
       // 
       // Handle a write operation on the LED state
@@ -247,32 +417,78 @@ void loop() {
       ledColor[1] = (color>>8)&0xFF;
       ledColor[2] = color&0xff;
     }
-    
+    if (cLedCycle.written()) {
+      // 
+      // Handle a write operation on the LED cycle time
+      // 
+      ledCycle = cLedCycle.value();
+    }
+    if (cLedDuty.written()) {
+      // 
+      // Handle a write operation on the LED state
+      // 
+      ledDuty = cLedDuty.value();
+    }
+#endif
+
     // 
-    // Check if the button count is changed, then
-    // read the button and update its value/count if changed.
-    // 
+    // Check if the button count is changed
+    //
+#if 0
     if (cCounter1.written()) {
       count1 = cCounter1.value();
-    }
-    bool newButton1 = digitalRead(button1Pin);
-    if (newButton1 != button1) {
-      cButton1.setValue(button1 = newButton1);
-      cCounter1.setValue(++count1);
     }
 
     if (cCounter2.written()) {
       count2 = cCounter2.value();
     }
-    bool newButton2 = digitalRead(button2Pin);
-    if (newButton2 != button2) {
-      cButton2.setValue(button2 = newButton2);
-      cCounter2.setValue(++count2);
-    }
-  } // end if connected
+#endif
+  }
 
+  //
+  // read the button and update its value/count if changed.
+  //
+#ifdef ENABLE_BUTTONS
+  bool newButton1 = digitalRead(button1Pin);
+  if (newButton1 != button1) {
+    button1 = newButton1;
+    cButton1.setValue(button1);
+    cCounter1.setValue(++count1);
+    if (newButton1) {
+      ledColor[0] = 0xff;
+    }
+    else {
+      ledColor[0] = 0x00;
+    }
+    
+  }
+  
+  bool newButton2 = digitalRead(button2Pin);
+  if (newButton2 != button2) {
+    button2 = newButton2;
+    cButton2.setValue(button2);
+    cCounter2.setValue(++count2);
+    if (newButton1) {
+      ledColor[2] = 0xff;
+    }
+    else {
+      ledColor[2] = 0x00;
+    }
+  }
+
+/*
+  // random wobble on counter 1
+  if ((now % 1) && count1 < 4096) {
+    cCounter1.setValue(++count1);
+  }
+  else if (count1 > 0) {
+    cCounter1.setValue(--count1);
+  }
+*/
+#endif
+  
   // do any other loop processing here
-  uint32_t now = millis();
+#ifdef ENABLE_LEDS
   uint32_t cyclePos = now % ledCycle;
   uint32_t cycleTip = ledCycle * ledDuty / 100;
 
@@ -291,6 +507,30 @@ void loop() {
     analogWrite(ledPins[2], 255);
     led = false;
   }
+#endif
 
+#ifdef ENABLE_BMP
+  if (bmpReady) {
+    if ((now - lastTemp) > 2000) {
+      lastTemp = now;
+      temp = bmp.readTemperature();
+      int16_t tempValue = temp*100;
+      cTemp.setValue(tempValue);
+      pressure = bmp.readPressure();
+      uint32_t pressureValue = pressure*10;
+      //cPressure.setValue(pressureValue);
+    }
+  }
+#endif
+
+#ifdef ENABLE_ALS
+  if ((now - lastAls) > 000) {
+    float als = myAP3216.getAmbientLight();
+    cLight.setValue(als);
+    unsigned int prox = myAP3216.getProximity();
+    cPresence.setValue(prox);
+    myAP3216.setMode(ALS_PS_ONCE);
+  }
+#endif
 
 }
